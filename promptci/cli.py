@@ -87,33 +87,46 @@ def cmd_bless(a) -> int:
     return 0
 
 
+def false_alarm_report(runs: list[dict], max_drop: float, temperature) -> str:
+    """Compare every ordered pair of identical-prompt runs and count how often each rule fails the gate."""
+    pairs = [(i, j) for i in range(len(runs)) for j in range(len(runs)) if i != j]
+    rules = [("naive: any drop fails", Rules(max_drop=0, tag_max_drop=0, critical=False)),
+             (f"drop > {max_drop:g} pts + tag + critical (default)", Rules(max_drop=max_drop)),
+             ("default + McNemar p < 0.05 on drops", Rules(max_drop=max_drop, require_significance=True)),
+             ("critical-case rule alone", Rules(max_drop=1e9, tag_max_drop=1e9)),
+             ("McNemar-gated drops, no critical rule", Rules(max_drop=max_drop, require_significance=True, critical=False))]
+    rows = [f"| {label} | {sum(not compare(runs[i], runs[j], r).passed for i, j in pairs)}/{len(pairs)} |"
+            for label, r in rules]
+    rates = [100 * r["summary"]["overall"]["rate"] for r in runs]
+    flaky = sorted({c["id"] for k, c in enumerate(runs[0]["cases"])
+                    if len({r["cases"][k]["passed"] for r in runs}) > 1})
+    m = runs[0]["meta"]
+    return "\n".join([
+        f"## Noise check: `{m['model']}`, `{m['prompt']}`, temperature {temperature}", "",
+        f"Pass rates over {len(runs)} identical runs: {', '.join(f'{x:.1f}%' for x in rates)} "
+        f"(spread {max(rates) - min(rates):.1f} points). {len(flaky)} of {len(runs[0]['cases'])} cases "
+        f"changed verdict at least once.", "",
+        f"| Gate rule | False alarms ({len(pairs)} comparisons, prompt unchanged) |", "|---|---|", *rows, ""])
+
+
 def cmd_noise(a) -> int:
     """Rerun the SAME prompt several times and count how often each gate rule cries wolf."""
-    runs = []
-    for k in range(a.runs):
-        a.seed = 1000 * k
-        print(f"run {k + 1}/{a.runs}", file=sys.stderr)
-        runs.append(_do_run(a))
-    rates = [100 * r["summary"]["overall"]["rate"] for r in runs]
-    base = runs[0]
-    rows = []
-    for label, rules in [("naive: any drop > 0 points", Rules(max_drop=0, tag_max_drop=0, critical=False)),
-                         (f"threshold: drop > {a.max_drop:g} points + critical cases", Rules(max_drop=a.max_drop)),
-                         ("threshold + McNemar p < 0.05", Rules(max_drop=a.max_drop, require_significance=True))]:
-        alarms = sum(not compare(base, r, rules).passed for r in runs[1:])
-        rows.append(f"| {label} | {alarms}/{len(runs) - 1} |")
-    flips = [len(compare(base, r).lost) + len(compare(base, r).gained) for r in runs[1:]]
-    text = "\n".join([
-        f"## Noise check: `{base['meta']['model']}`, `{base['meta']['prompt']}`, temperature {a.temperature}", "",
-        f"Pass rates over {a.runs} identical runs: {', '.join(f'{x:.1f}%' for x in rates)} "
-        f"(spread {max(rates) - min(rates):.1f} points). Cases flipped vs run 1: {flips}.", "",
-        "| Gate rule | False alarms (prompt unchanged) |", "|---|---|", *rows, ""])
+    if a.from_dir:
+        runs = [R.load(p) for p in sorted(Path(a.from_dir).glob("noise_*.json"))]
+        temperature = runs[0]["meta"]["temperature"]
+    else:
+        runs = []
+        for k in range(a.runs):
+            a.seed = 1000 * k
+            print(f"run {k + 1}/{a.runs}", file=sys.stderr)
+            runs.append(_do_run(a))
+            if a.out:
+                R.save(runs[-1], Path(a.out) / f"noise_{k}.json")
+        temperature = a.temperature
+    text = false_alarm_report(runs, a.max_drop, temperature)
     print(text)
     if a.report:
         Path(a.report).write_text(text, encoding="utf-8")
-    if a.out:
-        for k, r in enumerate(runs):
-            R.save(r, Path(a.out) / f"noise_{k}.json")
     return 0
 
 
@@ -150,6 +163,7 @@ def main(argv=None) -> int:
     p.add_argument("--max-drop", type=float, default=5.0)
     p.add_argument("--report")
     p.add_argument("--out", help="folder for the individual runs")
+    p.add_argument("--from-dir", help="recompute the table from saved noise_*.json runs (no model calls)")
     p.set_defaults(fn=cmd_noise)
 
     a = ap.parse_args(argv)

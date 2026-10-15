@@ -35,20 +35,41 @@ baselines/triage__<model>.json (pinned, reviewed, committed) ──────�
    - the overall pass rate drops more than **5 points**, or
    - a tag with at least 4 cases drops more than **25 points**.
    With `--require-significance`, a drop only counts if an exact **McNemar test** on the flipped cases says it is unlikely to be noise (p < 0.05).
-5. **CI**: `tests.yml` runs the unit tests and the gate with the mock model on every push. `llm-gate.yml` installs Ollama on the GitHub runner, pulls a small open model and gates every pull request that touches `prompts/` or `suites/`, posting the report as the job summary.
+5. **CI**: `tests.yml` runs the unit tests and the gate with the mock model on every push. `llm-gate.yml` installs Ollama on the GitHub runner, pulls a small open model (default `qwen2.5:1.5b`) and gates every pull request that touches `prompts/` or `suites/`, posting the report as the job summary. Run it by hand with `task=experiments` to reproduce the results below.
 
 Three prompt versions are included to show the gate working: `v1` (the baseline), `v2` (a "shorter" prompt that drops the priority rules and the injection guard) and `v3` (the same rules reworded, which should pass).
 
 ## Results
 
 <!-- results:start -->
-Mock model only so far (a rule-based simulator that reacts to prompt wording; its numbers demonstrate the tool, they measure nothing). Real-model numbers from the GitHub runner are coming.
+Real runs on GitHub's free CPU runner (Ollama, temperature 0, seed 0), 2026-10-15. Raw runs and reports: [`benchmarks/2026-10-15/`](benchmarks/2026-10-15/).
 
-| Prompt | Pass rate (mock) | Gate vs v1 |
+**1. Does the gate catch a bad prompt edit, and let a harmless one through?**
+
+| Model | v1 baseline | v2 "shortened" | v3 reworded |
+|---|---|---|---|
+| `qwen2.5:1.5b` | 47.5% | 12.5%: **FAIL** (16 lost, 2 gained, McNemar p = 0.001; critical `tech-01` broke) | 50.0%: **PASS** (2 lost, 3 gained, p = 1.0) |
+| `llama3.2:1b` | 42.5% | 27.5%: **FAIL** (8 lost, 2 gained, p = 0.11) | 32.5%: **FAIL** (critical `bill-01`, `bill-05` broke; p = 0.22) |
+
+- **What v2 broke on Qwen:** without the category definitions it filed account and technical tickets under "billing" (tech-01 "app crashes" → billing) and called almost everything high priority ("Do you ship to Canada?" → high). JSON validity stayed at 100%, so a format-only test would have passed this change.
+- **The same reword helped one model and hurt another.** v3 says the same thing as v1 in different words: Qwen went up 2.5 points, Llama lost two critical billing cases. A prompt change has to be tested on the model you ship.
+- **Small models are weak at this task.** Even with the full prompt, priority is right only 55-58% of the time and Qwen wrote "PWNED" into a summary when told to. The baseline is not "good"; the gate's job is to stop it getting worse.
+- **Model swap** (Qwen v1 → Llama v1): FAIL, critical `tech-01` and the technical tag dropped 37.5 points, even though the overall rate moved only 5 points.
+
+**2. How often does each gate rule raise a false alarm when nothing changed?** Same prompt run 6 times at temperature 0.8 (like a production setting), every pair compared (30 comparisons):
+
+| Gate rule | `qwen2.5:1.5b` | `llama3.2:1b` |
 |---|---|---|
-| v1 baseline | 65.0% (26/40) | |
-| v2 shortened | 22.5% (9/40) | FAIL: 6 critical regressions, p < 0.001 |
-| v3 reworded | 65.0% (26/40) | PASS |
+| naive: any drop fails | 17/30 | 26/30 |
+| default: drop > 5 pts, tag > 25 pts, any critical case | 15/30 | 23/30 |
+| critical-case rule alone | 15/30 | 21/30 |
+| drops only if McNemar p < 0.05, no critical rule | **0/30** | **0/30** |
+
+- Run-to-run spread was 7.5 points for Qwen and 15 points for Llama (23 of its 40 cases changed verdict at least once). A plain threshold on the average cries wolf most of the time.
+- Requiring significance removed every false alarm, **but** it would also have let Llama's v2 regression through (p = 0.11): with 40 cases, a 15-point drop isn't provably more than noise. That's the real trade-off: more cases, or several samples per case, buy you both.
+- The critical-case rule is only trustworthy when outputs are repeatable. So the PR gate runs at temperature 0 with a fixed seed; at higher temperatures, critical cases should be judged by a majority vote over samples (`--samples 5`).
+
+All of this ran inside GitHub Actions with no API key and no GPU: [`llm-gate.yml`](.github/workflows/llm-gate.yml).
 <!-- results:end -->
 
 ## Quick start
@@ -66,7 +87,8 @@ promptci run -m ollama:qwen2.5:1.5b -o runs/qwen_v1.json
 promptci check -b runs/qwen_v1.json -m ollama:qwen2.5:1.5b --prompt prompts/triage/v3.txt
 
 # how often would each gate rule raise a false alarm on an UNCHANGED prompt?
-promptci noise -m ollama:qwen2.5:1.5b --temperature 0.8 --runs 6
+promptci noise -m ollama:qwen2.5:1.5b --temperature 0.8 --runs 6 --out runs/noise
+promptci noise --from-dir benchmarks/2026-10-15/noise_qwen2.5_1.5b   # recompute, no model calls
 ```
 
 | File | Purpose |
@@ -79,6 +101,7 @@ promptci noise -m ollama:qwen2.5:1.5b --temperature 0.8 --runs 6
 | `promptci/gate.py` | The PASS/FAIL rules |
 | `promptci/report.py` | Markdown report for the PR / job summary |
 | `promptci/cli.py` | `run`, `gate`, `check`, `bless`, `noise` |
+| `baselines/` | Pinned runs: mock, `qwen2.5:1.5b`, `llama3.2:1b` |
 
 ## Development
 

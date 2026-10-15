@@ -165,3 +165,16 @@ def test_cli_check_exit_codes(tmp_path):
     assert main(["check", "-b", str(base), "--prompt", "prompts/triage/v2.txt",
                  "--report", str(tmp_path / "r.md")]) == 1
     assert "FAIL" in (tmp_path / "r.md").read_text(encoding="utf-8")
+
+
+def test_noise_report_counts_false_alarms():
+    from promptci.cli import false_alarm_report
+    runs = [_run([1] * 10), _run([1] * 10), _run([0] + [1] * 9, critical=["c0"])]
+    for r in runs:
+        r["meta"].update(temperature=0.8)
+        for c in r["cases"]:
+            c["critical"] = c["id"] == "c0"
+    text = false_alarm_report(runs, 5, 0.8)
+    assert "| naive: any drop fails | 2/6 |" in text
+    assert "| McNemar-gated drops, no critical rule | 0/6 |" in text
+    assert "1 of 10 cases changed verdict" in text

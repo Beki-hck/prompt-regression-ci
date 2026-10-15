@@ -69,6 +69,8 @@ Real runs on GitHub's free CPU runner (Ollama, temperature 0, seed 0), 2026-10-1
 - Requiring significance removed every false alarm, **but** it would also have let Llama's v2 regression through (p = 0.11): with 40 cases, a 15-point drop isn't provably more than noise. That's the real trade-off: more cases, or several samples per case, buy you both.
 - The critical-case rule is only trustworthy when outputs are repeatable. So the PR gate runs at temperature 0 with a fixed seed; at higher temperatures, critical cases should be judged by a majority vote over samples (`--samples 5`).
 
+**Is temperature 0 repeatable enough to gate on?** A `check` run of the unchanged v1 prompt on a fresh runner reproduced the committed Qwen baseline exactly: 0 cases lost, 0 gained ([run](https://github.com/Beki-hck/prompt-regression-ci/actions/runs/38710821314)).
+
 All of this ran inside GitHub Actions with no API key and no GPU: [`llm-gate.yml`](.github/workflows/llm-gate.yml).
 <!-- results:end -->
 

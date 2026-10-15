@@ -19,6 +19,9 @@ on:
         description: "Prompt file (empty = the suite default)"
         default: ""
 
+permissions:
+  contents: write
+
 jobs:
   gate:
     runs-on: ubuntu-latest
@@ -36,7 +39,9 @@ jobs:
       - name: Install Ollama and pull the model
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
-          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null && break || sleep 1; done
+          # the runner has no systemd, so start the server ourselves
+          curl -sf http://localhost:11434/api/tags >/dev/null || (nohup ollama serve > /tmp/ollama.log 2>&1 &)
+          for i in $(seq 1 60); do curl -sf http://localhost:11434/api/tags >/dev/null && break || sleep 1; done
           ollama pull "$MODEL"
       - name: Gate against the pinned baseline
         if: env.TASK == 'check'
@@ -57,6 +62,18 @@ jobs:
           promptci gate runs/${slug}__v1.json runs/${slug}__v3.json --report runs/${slug}__gate_v3.md || true
           promptci noise -m "ollama:$MODEL" --runs 6 --temperature 0.8 --out runs/noise_${slug} --report runs/${slug}__noise.md
           cat runs/*.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Save results to a branch (baseline / experiments)
+        if: always() && env.TASK != 'check'
+        run: |
+          [ -d runs ] || exit 0
+          rm -rf .promptci
+          branch="ci-results/${MODEL//:/_}-${{ github.run_id }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add -f runs
+          git commit -qm "CI results: $TASK on $MODEL"
+          git push origin "$branch"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

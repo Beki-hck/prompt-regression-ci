@@ -1,0 +1,64 @@
+# Runs a real open model (through Ollama, on the free GitHub runner CPU) against
+# the golden set whenever a prompt or the suite changes, and fails the PR on a
+# regression. Manual runs can also produce a new baseline or the experiments.
+name: llm-gate
+on:
+  pull_request:
+    paths: ["prompts/**", "suites/**", "baselines/**"]
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "check = gate vs baseline, baseline = produce a new baseline, experiments = README numbers"
+        type: choice
+        options: [check, baseline, experiments]
+        default: check
+      model:
+        description: "Ollama model"
+        default: "qwen2.5:1.5b"
+      prompt:
+        description: "Prompt file (empty = the suite default)"
+        default: ""
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MODEL: ${{ inputs.model || 'qwen2.5:1.5b' }}
+      TASK: ${{ inputs.task || 'check' }}
+      PROMPT_ARG: ${{ inputs.prompt && format('--prompt {0}', inputs.prompt) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Install Ollama and pull the model
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null && break || sleep 1; done
+          ollama pull "$MODEL"
+      - name: Gate against the pinned baseline
+        if: env.TASK == 'check'
+        run: |
+          base="baselines/triage__ollama_${MODEL//:/_}.json"
+          promptci check -b "$base" -m "ollama:$MODEL" $PROMPT_ARG -o runs/candidate.json --report runs/report.md
+      - name: Produce a baseline (download the artifact, review, commit it)
+        if: env.TASK == 'baseline'
+        run: promptci run -m "ollama:$MODEL" $PROMPT_ARG -o "runs/triage__ollama_${MODEL//:/_}.json"
+      - name: Experiments (three prompt versions + noise check)
+        if: env.TASK == 'experiments'
+        run: |
+          slug="${MODEL//:/_}"
+          for v in v1 v2 v3; do
+            promptci run -m "ollama:$MODEL" --prompt prompts/triage/$v.txt -o runs/${slug}__$v.json
+          done
+          promptci gate runs/${slug}__v1.json runs/${slug}__v2.json --report runs/${slug}__gate_v2.md || true
+          promptci gate runs/${slug}__v1.json runs/${slug}__v3.json --report runs/${slug}__gate_v3.md || true
+          promptci noise -m "ollama:$MODEL" --runs 6 --temperature 0.8 --out runs/noise_${slug} --report runs/${slug}__noise.md
+          cat runs/*.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runs-${{ env.TASK }}
+          path: runs/

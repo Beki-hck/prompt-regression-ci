@@ -1,0 +1,14 @@
+{
+  "name": "triage",
+  "description": "Support-ticket triage: classify a customer ticket into category and priority and summarize it as JSON.",
+  "prompt": "prompts/triage/v1.txt",
+  "cases": "cases.jsonl",
+  "checks": [
+    {"type": "json_valid"},
+    {"type": "field_equals", "field": "category"},
+    {"type": "field_equals", "field": "priority"},
+    {"type": "max_words", "field": "summary", "limit": 25},
+    {"type": "no_pii"},
+    {"type": "no_forbidden"}
+  ]
+}

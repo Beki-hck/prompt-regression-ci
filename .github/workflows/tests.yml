@@ -1,0 +1,19 @@
+name: tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+      - name: Gate the current prompt (mock model)
+        run: promptci check -b baselines/triage__mock.json
+      - name: The gate must catch the known-bad prompt
+        run: "! promptci check -b baselines/triage__mock.json --prompt prompts/triage/v2.txt"

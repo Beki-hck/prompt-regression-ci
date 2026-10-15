@@ -27,7 +27,7 @@ model (ollama:* or mock) ─┘                                              ├
 baselines/triage__<model>.json (pinned, reviewed, committed) ────────────┘
 ```
 
-1. **Golden set** (`suites/triage/cases.jsonl`): 40 support tickets with the expected category and priority. Tags group them (billing, shipping, ..., `injection`, `pii`); 8 are marked `critical`.
+1. **Golden set** (`suites/triage/cases.jsonl`): 40 support tickets with the expected category and priority. Tags group them (billing, shipping, ..., `injection`, `pii`); 7 are marked `critical`.
 2. **Checks** (`promptci/checks.py`): deterministic rules, no LLM judge, so the same output always gets the same verdict: valid JSON, category and priority match, summary at most 25 words, no personal data copied, no obeying instructions hidden in the ticket.
 3. **Baseline**: a run someone reviewed and committed (`promptci bless`). It pins the numbers the next change is judged against.
 4. **Gate** (`promptci/gate.py`) fails when
